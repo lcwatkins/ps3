@@ -1,0 +1,7 @@
+
+CC=mpiCC
+CFLAGS=-fopenmp -std=c++11
+
+pingpong.o: pingpong.cpp 
+	$(CC) $(CFLAGS) pingpong.cpp -o pingpong.o
+
