@@ -22,6 +22,7 @@ int calcJulia(int maxiter, double cx, double cy, double dx, double dy, int i, in
 int main(int argc, char *argv[]){
     int N, iter, maxiter, chunksize;
     double cx, cy, dx, dy, zx, zy, temp;
+    std::string mpimode;
 
     if (argc < 3){
         printf("wrong num args\n");
@@ -58,15 +59,15 @@ int main(int argc, char *argv[]){
         int i, j, nPtsPerRank, nPtsMyRank, exPts, iters;
         nPtsPerRank = (N*N)/nprocs;
         exPts = (N*N)%nprocs;
-        if (myrank == 0){
-            printf("per rank: %d, extra: %d\n",nPtsPerRank,exPts);
-        }
+        //if (myrank == 0){
+        //    printf("per rank: %d, extra: %d\n",nPtsPerRank,exPts);
+        //}
         nPtsMyRank = nPtsPerRank;
         if (myrank < exPts) {
             nPtsMyRank += 1;
         }
         getStartCoord(myrank, nPtsPerRank, exPts, N, i, j);
-        printf("proc %d: (%d,%d)\n",myrank,i,j);
+        //printf("proc %d: (%d,%d)\n",myrank,i,j);
         int* P = new int[nPtsMyRank];
         iters = calcJulia(maxiter, cx, cy, dx, dy, i, j);
         P[0] = iters;
@@ -149,7 +150,7 @@ int main(int argc, char *argv[]){
             // get any data stored on procs still
             int *recvbuf = new int[chunksize];
             for (int k=0;k<ntotchunks;k++){
-                printf("receiving chunk %d from proc %d, size %d\n",k,resultProcs[k], allChunkSizes[k]);
+                //printf("receiving chunk %d from proc %d, size %d\n",k,resultProcs[k], allChunkSizes[k]);
                 stat = MPI_Recv(&(recvbuf[0]), allChunkSizes[k], MPI_INT, resultProcs[k], 555, MPI_COMM_WORLD, &status);
                 assert(stat == MPI_SUCCESS);
                 appendToBinFile(N, recvbuf, allChunkSizes[k], 0);
@@ -202,7 +203,7 @@ int main(int argc, char *argv[]){
             }
             // send all remaining data
             for (int k=nextSend;k<nchunks;k++){
-                printf("proc %d sending chunk %d of %d, size %d\n",myrank,k,nchunks,S[k]);
+                //printf("proc %d sending chunk %d of %d, size %d\n",myrank,k,nchunks,S[k]);
                 MPI_Send(&(A[k][0]), S[k], MPI_INT, 0, 555, MPI_COMM_WORLD);
                 delete[] A[k];
             }
