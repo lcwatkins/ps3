@@ -40,7 +40,7 @@ int main(int argc, char *argv[]){
     stat = MPI_Comm_rank(MPI_COMM_WORLD, &myrank);
     assert(stat == MPI_SUCCESS);
 
-    //////////// MPI ///////////////
+    /////////////// MPI: STATIC //////////////////
     int i, j, nPtsPerRank, nPtsMyRank, exPts, iters;
     nPtsPerRank = (N*N)/nprocs;
     exPts = (N*N)%nprocs;
@@ -66,6 +66,87 @@ int main(int argc, char *argv[]){
         P[pt] = iters;
     }
     printf("%d end: (%d,%d)\n",myrank,i,j);
+
+    /////////////// MPI: DYNAMIC //////////////////
+    int chunksize, thischunk, pt, stat, source, ndone, ntotchunks;
+    chunksize = 5;
+    thischunk = chunksize;
+    ntotchunks = 0;
+    pt = 0;
+    MPI_Status status;
+    if (myrank == 0) {
+        int *resultProcs = new int[((N*N)/(chunksize)+1)];
+        // master
+        while (pt < (N*N)) {
+            if ((N*N)-pt < chunksize) {
+                thischunk = (N*N)-pt;
+                // and we're done after this one
+            }
+            // wait for message saying 'done/ready'
+            // then send more to next proc
+            stat = MPI_Recv(&source, 1, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+            assert(stat == MPI_SUCCESS);
+            resultProcs[ntotchunks] = source;
+            MPI_Send(&pt, 1, MPI_INT, source, 0, MPI_COMM_WORLD);
+            MPI_Send(&thischunk, 1, MPI_INT, source, 0, MPI_COMM_WORLD);
+            pt += thischunk;
+            ntotchunks += 1;
+        }
+        // send done signal
+        // nprocs-1 b/c not counting this proc
+        while (ndone < (nprocs-1)){
+            stat = MPI_Recv(&source, 1, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+            assert(stat == MPI_SUCCESS);
+            MPI_Send(0, 1, MPI_INT, source, 999, MPI_COMM_WORLD);
+            ndone += 1;
+        }
+        // get any data stored on procs still
+    } else {
+        // slave
+        // keep P to store results, nchunks is number of chunks procd here
+        // keep A to store pointers to where results are stored -- if divided evenly, this 
+        // would be (N*N)/(chunksize*nprocs). Estimate as ... ?? 
+        int i,j, nchunks, work;
+        int **A = new[((sqrt(N)*N*N)/(chunksize*nprocs))];
+        int *S = new[((sqrt(N)*N*N)/(chunksize*nprocs))];
+        nchunks = 0;
+        work = 1;
+
+        while (work){
+            MPI_Send(&myrank, 1, MPI_INT, 0, 1, MPI_COMM_WORLD);
+            stat = MPI_Recv(&mypt, 1, MPI_INT, 0, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+            assert(stat == MPI_SUCCESS);
+            // check for done signal
+             if (status.MPI_TAG == 999) {
+                work = 0;
+             } else if (status.MPI_TAG == 555){
+                senddata;
+             } else {
+                MPI_Recv(&thischunk, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, &status);
+                getCoordFromPt(mypt, N, &i, &j)
+
+                int* P = new int[thischunk];
+                A[nchunks] = &(P[0]);
+                S[nchunks] = thischunk;
+                for (int pt=0;pt<thischunk;pt++){
+                    saveind += 1;
+                    if (pt > 0){
+                        j += 1;
+                        if (j == N) {
+                            i += 1;
+                            j = 0;
+                        }
+                    }
+                    iters = calcJulia(maxiter, cx, cy, dx, dy, i, j);
+                }
+                nchunks += 1;
+                // nonblock send data here
+            }
+        }
+        // send all remaining data
+    }
+
+
     printToBinFile_mpi(N, P, nprocs, myrank, nPtsMyRank);
 
 //    //// SERIAL ////
@@ -92,6 +173,18 @@ int main(int argc, char *argv[]){
     return 0;
 }
 
+//void sendNext(int *P, int *Psafe, int &sendind, int chunksize, int savesize){
+//    MPI_Status status;
+//    int stat;
+//    stat = MPI_Recv(&masterflag, 1, MPI_INT, 0, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+//    assert(stat == MPI_SUCCESS);
+//    MPI_Send(&P[sendind], chunksize, MPI_INT, 0, 88, MPI_COMM_WORLD);
+//    sendind += chunksize;
+//    if (sendind >= savesize){
+//        sendind = 0;
+//    }
+//}
+
 
 int calcJulia(int maxiter, double cx, double cy, double dx, double dy, int i, int j){
     double zx, zy, temp;
@@ -106,6 +199,18 @@ int calcJulia(int maxiter, double cx, double cy, double dx, double dy, int i, in
         iter += 1;
     }
     return iter;
+}
+
+// check this
+void getCoordFromPt(int pt, int N, int &x, int &y){
+    x = 0;
+    y = 0;
+    while (pt >= N){
+        x += 1;
+        pt -= N;
+    }
+    y = pt;
+    return;
 }
 
 // a == index of first point in flattened array, then find coordinate (i,j) of 
