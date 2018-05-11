@@ -4,6 +4,7 @@
 #include <string>
 #include <stdio.h>
 #include <stdlib.h>
+#include <iostream>
 #include <vector>
 #include <math.h>
 #include <assert.h>
@@ -21,7 +22,7 @@ int calcJulia(int maxiter, double cx, double cy, double dx, double dy, int i, in
 
 int main(int argc, char *argv[]){
     int N, iter, maxiter, chunksize;
-    double cx, cy, dx, dy, zx, zy, temp;
+    double cx, cy, dx, dy, zx, zy, temp, t0, t1, localtime, totaltime;
     std::string mpimode;
 
     if (argc < 3){
@@ -53,21 +54,22 @@ int main(int argc, char *argv[]){
     stat = MPI_Comm_rank(MPI_COMM_WORLD, &myrank);
     assert(stat == MPI_SUCCESS);
 
+    if (nprocs == 1) {
+        mpimode = "serial";
+    }
+
 
     ///////////////////////////////////////     MPI: STATIC     ///////////////////////////////////////////
     if (mpimode.compare("static") == 0){
         int i, j, nPtsPerRank, nPtsMyRank, exPts, iters;
         nPtsPerRank = (N*N)/nprocs;
         exPts = (N*N)%nprocs;
-        //if (myrank == 0){
-        //    printf("per rank: %d, extra: %d\n",nPtsPerRank,exPts);
-        //}
         nPtsMyRank = nPtsPerRank;
         if (myrank < exPts) {
             nPtsMyRank += 1;
         }
+        t0 = omp_get_wtime();
         getStartCoord(myrank, nPtsPerRank, exPts, N, i, j);
-        //printf("proc %d: (%d,%d)\n",myrank,i,j);
         int* P = new int[nPtsMyRank];
         iters = calcJulia(maxiter, cx, cy, dx, dy, i, j);
         P[0] = iters;
@@ -83,6 +85,12 @@ int main(int argc, char *argv[]){
         //printf("%d end: (%d,%d)\n",myrank,i,j);
         MPI_Barrier(MPI_COMM_WORLD);
         printToBinFile_mpi(N, P, nprocs, myrank, nPtsMyRank);
+        t1 = omp_get_wtime();
+        localtime = t1 - t0;
+        MPI_Reduce(&localtime, &totaltime, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+        if (myrank == 0){
+            std::cout << mpimode << " with " << nprocs << " MPI ranks " << totaltime*1000 << " ms" << std::endl;
+        }
         MPI_Finalize();
     }
 
@@ -110,8 +118,10 @@ int main(int argc, char *argv[]){
         thischunk = chunksize;
         ntotchunks = 0;
         pt = 0;
+        ndone = 0;
         MPI_Status status;
 
+        t0 = omp_get_wtime();
         if (myrank == 0) {
             // master
             //printf("%d points over %d procs, chunksize %d\n", (N*N), (nprocs-1), chunksize);
@@ -130,8 +140,10 @@ int main(int argc, char *argv[]){
                 }
                 // wait for message saying 'done/ready'
                 // then send more to next proc
+                //printf("waiting...\n");
                 stat = MPI_Recv(&source, 1, MPI_INT, MPI_ANY_SOURCE, 1, MPI_COMM_WORLD, &status);
                 assert(stat == MPI_SUCCESS);
+                //printf("sending %d to %d\n",pt,source);
                 resultProcs[ntotchunks] = source;
                 allChunkSizes[ntotchunks] = thischunk;
                 MPI_Send(&pt, 1, MPI_INT, source, 0, MPI_COMM_WORLD);
@@ -175,6 +187,7 @@ int main(int argc, char *argv[]){
                 assert(stat == MPI_SUCCESS);
                 // check for done signal
                  if (status.MPI_TAG == 999) {
+                    //printf("received finish flag on rank %d\n",myrank);
                     work = 0;
                  } else if (status.MPI_TAG == 555) {
                      // if master asks for data to print periodically -- *not* finished implementing!
@@ -203,18 +216,25 @@ int main(int argc, char *argv[]){
             }
             // send all remaining data
             for (int k=nextSend;k<nchunks;k++){
-                //printf("proc %d sending chunk %d of %d, size %d\n",myrank,k,nchunks,S[k]);
+                //printf("%d sending chunk %d of %d\n",myrank,k+1,nchunks);
                 MPI_Send(&(A[k][0]), S[k], MPI_INT, 0, 555, MPI_COMM_WORLD);
                 delete[] A[k];
             }
         }
         MPI_Barrier(MPI_COMM_WORLD);
+        t1 = omp_get_wtime();
+        localtime = t1 - t0;
+        MPI_Reduce(&localtime, &totaltime, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
         MPI_Finalize();
+        if (myrank == 0){
+            std::cout << mpimode << " with " << nprocs << " MPI ranks " << totaltime*1000 << " ms" << std::endl;
+        }
     }
 
 
     //////////////////////////////////////       SERIAL       ///////////////////////////////////////////
     if (mpimode.compare("serial") == 0){
+        t0 = omp_get_wtime();
         int **P;
         P = alloc2darrayInts(N);
         for (int i=0;i<N;i++){
@@ -231,7 +251,10 @@ int main(int argc, char *argv[]){
                 P[i][j] = iter ;
             }
         }
+        t1 = omp_get_wtime();
+        totaltime = t1 - t0;
         printToBinFile(N,P);
+        std::cout << mpimode << " with " << nprocs << " MPI ranks " << totaltime*1000 << " ms" << std::endl;
     }
     
     return 0;
@@ -398,14 +421,14 @@ void printToBinFile_mpi(int N, int *A, int nprocs, int myrank, int mysize){
             outf.write((char *) (&A[i]), sizeof(int));
         }
 
-        int recvbuf[mysize];
+        int* recvbuf = new int[mysize];
         // receive from all other procs
         for (int i=1; i<nprocs; i++){
             stat = MPI_Recv(&recvsize, 1, MPI_INT, i, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
             assert(stat == MPI_SUCCESS);
-            printf("size %d from %d\n",recvsize,i);
+            //printf("size %d from %d\n",recvsize,i);
             //int *recvbuf = new int[recvsize];
-            stat = MPI_Recv(&recvbuf, recvsize, MPI_INT, i, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+            stat = MPI_Recv(&(recvbuf[0]), recvsize, MPI_INT, i, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
             assert(stat == MPI_SUCCESS);
             for (int j=0; j<recvsize; j++){
                 outf.write((char *) (&recvbuf[j]), sizeof(int));
